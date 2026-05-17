@@ -1,6 +1,7 @@
 import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@5.9.0/+esm';
 import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7.9.0/+esm';
 
+const mapboxgl = maplibregl;
 const BOSTON_BIKE_LANES =
   'https://bostonopendata-boston.opendata.arcgis.com/datasets/boston::existing-bike-network-2022.geojson';
 const CAMBRIDGE_BIKE_LANES =
@@ -17,17 +18,22 @@ const tooltipName = document.querySelector('#tooltip-name');
 const tooltipTotal = document.querySelector('#tooltip-total');
 const tooltipDepartures = document.querySelector('#tooltip-departures');
 const tooltipArrivals = document.querySelector('#tooltip-arrivals');
+const tooltipFlow = document.querySelector('#tooltip-flow');
 
 const svg = d3.select('#map svg');
+const comma = d3.format(',');
 const stationFlow = d3.scaleQuantize().domain([0, 1]).range([0, 0.5, 1]);
 const departuresByMinute = Array.from({ length: 1440 }, () => []);
 const arrivalsByMinute = Array.from({ length: 1440 }, () => []);
 
 let baseStations = [];
+let totalTripCount = 0;
+let allStationTraffic = null;
+let updateFrame = null;
 let circles;
 let radiusScale = d3.scaleSqrt().domain([0, 1]).range([0, 28]);
 
-const map = new maplibregl.Map({
+const map = new mapboxgl.Map({
   container: 'map',
   style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
   center: [-71.09415, 42.36027],
@@ -36,7 +42,7 @@ const map = new maplibregl.Map({
   maxZoom: 18,
 });
 
-map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'bottom-right');
 
 function setStatus(message) {
   statusElement.textContent = message;
@@ -54,34 +60,42 @@ function formatTime(minutes) {
   return `${hour12}:${String(mins).padStart(2, '0')} ${period}`;
 }
 
-function filterByMinute(tripsByMinute, minute) {
+function rollupStationCounts(tripsByMinute, minute, stationKey) {
+  const counts = new Map();
+
+  function countTrip(trip) {
+    const id = trip[stationKey];
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+
   if (minute === -1) {
-    return tripsByMinute.flat();
+    for (const bucket of tripsByMinute) {
+      for (const trip of bucket) {
+        countTrip(trip);
+      }
+    }
+    return counts;
   }
 
-  const minMinute = (minute - 60 + 1440) % 1440;
-  const maxMinute = (minute + 60) % 1440;
-
-  if (minMinute > maxMinute) {
-    return tripsByMinute.slice(minMinute).concat(tripsByMinute.slice(0, maxMinute + 1)).flat();
+  for (let offset = -60; offset <= 60; offset += 1) {
+    const bucketIndex = (minute + offset + 1440) % 1440;
+    for (const trip of tripsByMinute[bucketIndex]) {
+      countTrip(trip);
+    }
   }
 
-  return tripsByMinute.slice(minMinute, maxMinute + 1).flat();
+  return counts;
 }
 
 function computeStationTraffic(stations, timeFilter = -1) {
-  const departures = d3.rollup(
-    filterByMinute(departuresByMinute, timeFilter),
-    (trips) => trips.length,
-    (trip) => trip.start_station_id,
-  );
-  const arrivals = d3.rollup(
-    filterByMinute(arrivalsByMinute, timeFilter),
-    (trips) => trips.length,
-    (trip) => trip.end_station_id,
-  );
+  if (timeFilter === -1 && allStationTraffic) {
+    return allStationTraffic;
+  }
 
-  return stations.map((station) => {
+  const departures = rollupStationCounts(departuresByMinute, timeFilter, 'start_station_id');
+  const arrivals = rollupStationCounts(arrivalsByMinute, timeFilter, 'end_station_id');
+
+  const stationsWithTraffic = stations.map((station) => {
     const id = station.short_name;
     const departureCount = departures.get(id) ?? 0;
     const arrivalCount = arrivals.get(id) ?? 0;
@@ -93,6 +107,12 @@ function computeStationTraffic(stations, timeFilter = -1) {
       totalTraffic: departureCount + arrivalCount,
     };
   });
+
+  if (timeFilter === -1) {
+    allStationTraffic = stationsWithTraffic;
+  }
+
+  return stationsWithTraffic;
 }
 
 function getCoords(station) {
@@ -109,10 +129,19 @@ function updatePositions() {
 }
 
 function updateTooltipContent(station) {
+  const departureRatio = station.totalTraffic ? station.departures / station.totalTraffic : 0.5;
+  const flow =
+    departureRatio > 0.55
+      ? 'More departures'
+      : departureRatio < 0.45
+        ? 'More arrivals'
+        : 'Balanced';
+
   tooltipName.textContent = station.name;
-  tooltipTotal.textContent = d3.format(',')(station.totalTraffic);
-  tooltipDepartures.textContent = d3.format(',')(station.departures);
-  tooltipArrivals.textContent = d3.format(',')(station.arrivals);
+  tooltipTotal.textContent = comma(station.totalTraffic);
+  tooltipDepartures.textContent = comma(station.departures);
+  tooltipArrivals.textContent = comma(station.arrivals);
+  tooltipFlow.textContent = flow;
 }
 
 function updateTooltipPosition(event) {
@@ -158,20 +187,35 @@ function updateCircles(timeFilter = -1) {
   updatePositions();
 }
 
-function updateTimeDisplay() {
+function queueCircleUpdate(timeFilter) {
+  if (updateFrame !== null) {
+    cancelAnimationFrame(updateFrame);
+  }
+
+  updateFrame = requestAnimationFrame(() => {
+    updateCircles(timeFilter);
+    updateFrame = null;
+  });
+}
+
+function updateTimeDisplay({ immediate = false } = {}) {
   const timeFilter = Number(timeSlider.value);
 
   if (timeFilter === -1) {
     selectedTime.textContent = '';
     anyTimeLabel.hidden = false;
-    setStatus(`${d3.format(',')(baseStations.length)} stations, all trips`);
+    setStatus(`${comma(baseStations.length)} stations, ${comma(totalTripCount)} trips`);
   } else {
     selectedTime.textContent = formatTime(timeFilter);
     anyTimeLabel.hidden = true;
-    setStatus(`${d3.format(',')(baseStations.length)} stations, +/- 1 hour`);
+    setStatus(`${comma(baseStations.length)} stations, +/- 1 hour around ${formatTime(timeFilter)}`);
   }
 
-  updateCircles(timeFilter);
+  if (immediate) {
+    updateCircles(timeFilter);
+  } else {
+    queueCircleUpdate(timeFilter);
+  }
 }
 
 function addBikeLaneLayer(sourceId, layerId, data, color) {
@@ -218,16 +262,16 @@ map.on('load', async () => {
 
     setStatus('Loading stations and trips...');
     const [stationsJson, trips] = await Promise.all([d3.json(STATIONS_URL), loadTrips()]);
+    totalTripCount = trips.length;
 
     baseStations = stationsJson.data.stations.filter(
       (station) => Number.isFinite(Number(station.lon)) && Number.isFinite(Number(station.lat)),
     );
 
-    updateCircles(-1);
-    updateTimeDisplay();
-    setStatus(`${d3.format(',')(baseStations.length)} stations, ${d3.format(',')(trips.length)} trips`);
-
+    timeSlider.disabled = false;
     timeSlider.addEventListener('input', updateTimeDisplay);
+    updateTimeDisplay({ immediate: true });
+
     map.on('move', updatePositions);
     map.on('zoom', updatePositions);
     map.on('resize', updatePositions);

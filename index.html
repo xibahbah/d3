@@ -23,7 +23,7 @@
     <section class="map-shell" aria-label="Interactive Bluebike traffic map">
       <div class="time-control">
         <label for="time-slider">Time filter</label>
-        <input id="time-slider" type="range" min="-1" max="1439" value="-1" step="1">
+        <input id="time-slider" type="range" min="-1" max="1439" value="-1" step="1" disabled>
         <div class="time-readout">
           <time id="selected-time"></time>
           <span id="any-time-label">(any time)</span>
@@ -53,6 +53,9 @@
 
         <dt>Arrivals</dt>
         <dd id="tooltip-arrivals"></dd>
+
+        <dt>Flow</dt>
+        <dd id="tooltip-flow"></dd>
       </dl>
     </section>
   </main>
