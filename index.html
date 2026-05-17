@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bikewatching Boston</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.9.0/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="global.css">
+  <link rel="stylesheet" href="map.css">
+  <script type="module" src="map.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Bikewatching Boston</h1>
+      <p>Bluebike station traffic across Boston and Cambridge, sized by trip volume and colored by travel flow.</p>
+    </div>
+    <div class="status" id="status">Loading map and bike data...</div>
+  </header>
+
+  <main>
+    <section class="map-shell" aria-label="Interactive Bluebike traffic map">
+      <div class="time-control">
+        <label for="time-slider">Time filter</label>
+        <input id="time-slider" type="range" min="-1" max="1439" value="-1" step="1">
+        <div class="time-readout">
+          <time id="selected-time"></time>
+          <span id="any-time-label">(any time)</span>
+        </div>
+      </div>
+
+      <div id="map">
+        <svg aria-label="Bluebike station traffic overlay"></svg>
+      </div>
+
+      <div class="legend" aria-label="Traffic direction legend">
+        <span>Flow:</span>
+        <div style="--departure-ratio: 1">More departures</div>
+        <div style="--departure-ratio: 0.5">Balanced</div>
+        <div style="--departure-ratio: 0">More arrivals</div>
+      </div>
+
+      <dl id="station-tooltip" class="tooltip" hidden>
+        <dt>Station</dt>
+        <dd id="tooltip-name"></dd>
+
+        <dt>Total trips</dt>
+        <dd id="tooltip-total"></dd>
+
+        <dt>Departures</dt>
+        <dd id="tooltip-departures"></dd>
+
+        <dt>Arrivals</dt>
+        <dd id="tooltip-arrivals"></dd>
+      </dl>
+    </section>
+  </main>
+</body>
+</html>
